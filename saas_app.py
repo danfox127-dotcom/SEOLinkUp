@@ -77,9 +77,33 @@ def get_scraper():
         }
     )
 
+# --- NEW: Googlebot Fallback Headers ---
+GOOGLEBOT_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+    'Accept': '*/*'
+}
+
+def fetch_with_fallback(url, timeout=30):
+    """Attempts to fetch a URL using Cloudscraper, falls back to Googlebot spoofing if tarpitted/blocked."""
+    scraper = get_scraper()
+    try:
+        r = scraper.get(url, timeout=timeout)
+        # If Cloudflare blocks the scraper, force the fallback
+        if r.status_code in [403, 503]:
+            r = requests.get(url, headers=GOOGLEBOT_HEADERS, timeout=timeout)
+        r.raise_for_status()
+        return r
+    except Exception as e:
+        # If the standard scraper timed out (tarpitting), try Googlebot as a last resort
+        try:
+            r = requests.get(url, headers=GOOGLEBOT_HEADERS, timeout=timeout)
+            r.raise_for_status()
+            return r
+        except:
+            raise e # Raise original error if both strategies fail
+
 # --- NEW: Sitemap Auto-Discovery Engine ---
 def discover_sitemap(input_url):
-    scraper = get_scraper()
     parsed = urlparse(input_url)
     scheme = parsed.scheme if parsed.scheme else "https"
     base_url = f"{scheme}://{parsed.netloc}"
@@ -88,7 +112,7 @@ def discover_sitemap(input_url):
     
     # 1. Check robots.txt (The Gold Standard)
     try:
-        r = scraper.get(f"{base_url}/robots.txt", timeout=10)
+        r = fetch_with_fallback(f"{base_url}/robots.txt", timeout=10)
         if r.status_code == 200:
             for line in r.text.split('\n'):
                 if line.lower().startswith('sitemap:'):
@@ -101,7 +125,7 @@ def discover_sitemap(input_url):
     for path in common_paths:
         test_url = f"{base_url}{path}"
         try:
-            r = scraper.get(test_url, timeout=10)
+            r = fetch_with_fallback(test_url, timeout=10)
             if r.status_code == 200 and 'xml' in r.headers.get('Content-Type', '').lower():
                 return test_url
         except:
@@ -111,12 +135,10 @@ def discover_sitemap(input_url):
 
 # Helper function to parse sitemaps recursively
 def fetch_sitemap_urls(sitemap_url, max_urls=5000):
-    scraper = get_scraper()
     urls = []
     try:
-        # Bumped timeout to 30s for massive enterprise sitemaps
-        r = scraper.get(sitemap_url, timeout=30)
-        r.raise_for_status()
+        # Bumped timeout to 45s for massive enterprise sitemaps and use fallback logic
+        r = fetch_with_fallback(sitemap_url, timeout=45)
         
         root = ET.fromstring(r.content)
         
@@ -129,7 +151,7 @@ def fetch_sitemap_urls(sitemap_url, max_urls=5000):
                         try:
                             urls.extend(fetch_sitemap_urls(loc, max_urls - len(urls)))
                         except Exception as sub_e:
-                            st.toast(f"Skipped a sub-sitemap due to timeout: {loc}")
+                            pass # Fail silently on broken sub-sitemaps to preserve overall progress
                 else:
                     urls.append(loc)
             if len(urls) >= max_urls:
@@ -137,12 +159,12 @@ def fetch_sitemap_urls(sitemap_url, max_urls=5000):
     except requests.exceptions.Timeout:
         st.error(f"⚠️ **Timeout Error:** The website took too long to respond ({sitemap_url}). It may be actively blocking bots or the sitemap is too large.")
     except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 503:
-            st.error(f"🛡️ **Firewall Blocked (503):** {sitemap_url} is protected by an enterprise firewall (like Cloudflare) that actively blocks automated scraping.")
-        elif e.response.status_code == 403:
-            st.error(f"🛑 **Forbidden (403):** This site explicitly denies access to automated tools.")
+        if e.response.status_code in [503, 403]:
+            st.error(f"🛡️ **Firewall Blocked ({e.response.status_code}):** {sitemap_url} is protected by an enterprise firewall (like Cloudflare) that actively blocks automated scraping.")
         else:
             st.error(f"⚠️ **HTTP Error ({e.response.status_code}):** {e}")
+    except ET.ParseError:
+        st.error(f"⚠️ **XML Parse Error:** {sitemap_url} did not return valid XML data.")
     except Exception as e:
         st.error(f"⚠️ **Error reading sitemap:** Could not parse {sitemap_url}. ({e})")
     
