@@ -10,6 +10,7 @@ import time
 import json
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
+import cloudscraper
 
 # --- Page Configuration & Theming ---
 st.set_page_config(page_title="Link Up Pro", page_icon="🔗", layout="wide")
@@ -64,17 +65,21 @@ app_mode = st.sidebar.radio("App Mode", ["🔗 Link Up Optimizer", "🖼️ AI A
 st.sidebar.divider()
 st.sidebar.info("💡 **Tip:** Use the menu above to switch between the Link Optimizer and the Alt Text Generator.")
 
-# --- Stealth Browser Headers ---
-STEALTH_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.5',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1'
-}
+# --- Advanced Stealth Scraper ---
+@st.cache_resource
+def get_scraper():
+    # Bypasses Cloudflare 503s and Anti-Bot walls by solving JS challenges automatically
+    return cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
+        }
+    )
 
 # --- NEW: Sitemap Auto-Discovery Engine ---
 def discover_sitemap(input_url):
+    scraper = get_scraper()
     parsed = urlparse(input_url)
     scheme = parsed.scheme if parsed.scheme else "https"
     base_url = f"{scheme}://{parsed.netloc}"
@@ -83,7 +88,7 @@ def discover_sitemap(input_url):
     
     # 1. Check robots.txt (The Gold Standard)
     try:
-        r = requests.get(f"{base_url}/robots.txt", timeout=10, headers=STEALTH_HEADERS)
+        r = scraper.get(f"{base_url}/robots.txt", timeout=10)
         if r.status_code == 200:
             for line in r.text.split('\n'):
                 if line.lower().startswith('sitemap:'):
@@ -96,7 +101,7 @@ def discover_sitemap(input_url):
     for path in common_paths:
         test_url = f"{base_url}{path}"
         try:
-            r = requests.get(test_url, timeout=10, headers=STEALTH_HEADERS)
+            r = scraper.get(test_url, timeout=10)
             if r.status_code == 200 and 'xml' in r.headers.get('Content-Type', '').lower():
                 return test_url
         except:
@@ -106,10 +111,11 @@ def discover_sitemap(input_url):
 
 # Helper function to parse sitemaps recursively
 def fetch_sitemap_urls(sitemap_url, max_urls=5000):
+    scraper = get_scraper()
     urls = []
     try:
         # Bumped timeout to 30s for massive enterprise sitemaps
-        r = requests.get(sitemap_url, headers=STEALTH_HEADERS, timeout=30)
+        r = scraper.get(sitemap_url, timeout=30)
         r.raise_for_status()
         
         root = ET.fromstring(r.content)
@@ -130,6 +136,13 @@ def fetch_sitemap_urls(sitemap_url, max_urls=5000):
                 break
     except requests.exceptions.Timeout:
         st.error(f"⚠️ **Timeout Error:** The website took too long to respond ({sitemap_url}). It may be actively blocking bots or the sitemap is too large.")
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 503:
+            st.error(f"🛡️ **Firewall Blocked (503):** {sitemap_url} is protected by an enterprise firewall (like Cloudflare) that actively blocks automated scraping.")
+        elif e.response.status_code == 403:
+            st.error(f"🛑 **Forbidden (403):** This site explicitly denies access to automated tools.")
+        else:
+            st.error(f"⚠️ **HTTP Error ({e.response.status_code}):** {e}")
     except Exception as e:
         st.error(f"⚠️ **Error reading sitemap:** Could not parse {sitemap_url}. ({e})")
     
@@ -313,7 +326,8 @@ if app_mode == "🔗 Link Up Optimizer":
             if fetch_url and st.button("Fetch & Process URL", type="primary"):
                 with st.spinner("Fetching content..."):
                     try:
-                        res = requests.get(fetch_url, headers=STEALTH_HEADERS)
+                        scraper = get_scraper()
+                        res = scraper.get(fetch_url)
                         res.raise_for_status()
                         soup_fetch = BeautifulSoup(res.text, 'html.parser')
                         main_content = soup_fetch.find('main') or soup_fetch.find('article') or soup_fetch.find('div', class_=re.compile(r'content|main|region-content', re.I))
@@ -324,6 +338,11 @@ if app_mode == "🔗 Link Up Optimizer":
                         else:
                             raw_html = str(soup_fetch.body) if soup_fetch.body else res.text
                             st.warning("Could not isolate main content; processed the entire page body.")
+                    except requests.exceptions.HTTPError as e:
+                        if e.response.status_code in [503, 403]:
+                            st.error(f"🛡️ **Firewall Blocked ({e.response.status_code}):** This site is protected by a firewall that blocks scraping. Try pasting the text instead.")
+                        else:
+                            st.error(f"Error fetching URL: {e}")
                     except Exception as e:
                         st.error(f"Error fetching URL: {e}")
 
