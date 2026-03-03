@@ -4,5 +4,3 @@ mammoth
 beautifulsoup4
 requests
 cloudscraper
-
-**What to expect now:** This will immediately fix 90% of the friction across the web! However, a tiny handful of Tier-1 media sites (like The Atlantic or NYT) pay for the highest possible level of Cloudflare Enterprise, which checks your IP address and blocks cloud servers outright. If that happens, the tool will now catch the error gracefully and explain *exactly* what happened in a beautiful UI alert, rather than spitting out ugly Python code to the user!
