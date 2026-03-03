@@ -3,3 +3,4 @@ pandas
 mammoth
 beautifulsoup4
 requests
+cloudscraper
