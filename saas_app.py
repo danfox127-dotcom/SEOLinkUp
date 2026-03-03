@@ -64,18 +64,26 @@ app_mode = st.sidebar.radio("App Mode", ["🔗 Link Up Optimizer", "🖼️ AI A
 st.sidebar.divider()
 st.sidebar.info("💡 **Tip:** Use the menu above to switch between the Link Optimizer and the Alt Text Generator.")
 
+# --- Stealth Browser Headers ---
+STEALTH_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1'
+}
+
 # --- NEW: Sitemap Auto-Discovery Engine ---
 def discover_sitemap(input_url):
     parsed = urlparse(input_url)
-    # Ensure we start with a clean scheme
     scheme = parsed.scheme if parsed.scheme else "https"
     base_url = f"{scheme}://{parsed.netloc}"
-    if not parsed.netloc: # Handle case where user just typed "theatlantic.com"
+    if not parsed.netloc:
         base_url = f"https://{parsed.path.split('/')[0]}"
     
     # 1. Check robots.txt (The Gold Standard)
     try:
-        r = requests.get(f"{base_url}/robots.txt", timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+        r = requests.get(f"{base_url}/robots.txt", timeout=10, headers=STEALTH_HEADERS)
         if r.status_code == 200:
             for line in r.text.split('\n'):
                 if line.lower().startswith('sitemap:'):
@@ -88,26 +96,22 @@ def discover_sitemap(input_url):
     for path in common_paths:
         test_url = f"{base_url}{path}"
         try:
-            r = requests.get(test_url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
-            # Ensure it's actually an XML file and not a 404 page that returns 200 OK
+            r = requests.get(test_url, timeout=10, headers=STEALTH_HEADERS)
             if r.status_code == 200 and 'xml' in r.headers.get('Content-Type', '').lower():
                 return test_url
         except:
             pass
     
-    # 3. Fallback: Return what the user entered if we couldn't find anything better
     return input_url
 
 # Helper function to parse sitemaps recursively
 def fetch_sitemap_urls(sitemap_url, max_urls=5000):
     urls = []
     try:
-        # Use a standard browser user-agent to prevent basic bot blocks
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        r = requests.get(sitemap_url, headers=headers, timeout=15)
+        # Bumped timeout to 30s for massive enterprise sitemaps
+        r = requests.get(sitemap_url, headers=STEALTH_HEADERS, timeout=30)
         r.raise_for_status()
         
-        # Parse XML
         root = ET.fromstring(r.content)
         
         for elem in root.iter():
@@ -115,13 +119,20 @@ def fetch_sitemap_urls(sitemap_url, max_urls=5000):
                 loc = elem.text.strip()
                 if loc.endswith('.xml'):
                     if len(urls) < max_urls:
-                        urls.extend(fetch_sitemap_urls(loc, max_urls - len(urls)))
+                        # Graceful degradation on sub-sitemaps
+                        try:
+                            urls.extend(fetch_sitemap_urls(loc, max_urls - len(urls)))
+                        except Exception as sub_e:
+                            st.toast(f"Skipped a sub-sitemap due to timeout: {loc}")
                 else:
                     urls.append(loc)
             if len(urls) >= max_urls:
                 break
+    except requests.exceptions.Timeout:
+        st.error(f"⚠️ **Timeout Error:** The website took too long to respond ({sitemap_url}). It may be actively blocking bots or the sitemap is too large.")
     except Exception as e:
-        st.error(f"Error reading sitemap {sitemap_url}: {e}")
+        st.error(f"⚠️ **Error reading sitemap:** Could not parse {sitemap_url}. ({e})")
+    
     return urls
 
 if app_mode == "🔗 Link Up Optimizer":
@@ -222,7 +233,7 @@ if app_mode == "🔗 Link Up Optimizer":
                 raw_urls = fetch_sitemap_urls(actual_sitemap_url)
                 
                 if not raw_urls:
-                    st.error("❌ No URLs found. We couldn't auto-discover an XML sitemap for this site.")
+                    st.error("❌ Scan Failed. The website may be blocking automated scrapers, or the sitemap could not be parsed.")
                 else:
                     for url in set(raw_urls):
                         # Skip junk assets
@@ -302,8 +313,7 @@ if app_mode == "🔗 Link Up Optimizer":
             if fetch_url and st.button("Fetch & Process URL", type="primary"):
                 with st.spinner("Fetching content..."):
                     try:
-                        headers = {'User-Agent': 'Mozilla/5.0'}
-                        res = requests.get(fetch_url, headers=headers)
+                        res = requests.get(fetch_url, headers=STEALTH_HEADERS)
                         res.raise_for_status()
                         soup_fetch = BeautifulSoup(res.text, 'html.parser')
                         main_content = soup_fetch.find('main') or soup_fetch.find('article') or soup_fetch.find('div', class_=re.compile(r'content|main|region-content', re.I))
@@ -334,7 +344,6 @@ if app_mode == "🔗 Link Up Optimizer":
 
                     url = master_link_map[kw_lower]
                     
-                    # Generalized silo logic (no hardcoded overrides)
                     if silo_filter_clean:
                         url_lower = url.lower()
                         if silo_filter_clean not in url_lower: continue
@@ -422,7 +431,6 @@ if app_mode == "🔗 Link Up Optimizer":
                         "contents": [{
                             "role": "user",
                             "parts": [{
-                                # Generalized SEO Prompt
                                 "text": f"You are an expert SEO specialist. Read the following article and provide an optimized H1, Meta Title (max 60 chars), and Meta Description (max 160 chars, compelling and click-worthy).\n\nArticle Text:\n{plain_text}"
                             }]
                         }],
@@ -499,7 +507,6 @@ elif app_mode == "🖼️ AI Alt Text Generator":
                         "contents": [{
                             "role": "user",
                             "parts": [
-                                # Generalized Accessibility Prompt
                                 { "text": "You are an expert web accessibility specialist. Write a concise, descriptive alt text for this image. Do not include phrases like 'Image of' or 'Picture of'. Focus purely on the subject matter and keep it under 125 characters." },
                                 { "inlineData": { "mimeType": img_file.type, "data": base64_img } }
                             ]
