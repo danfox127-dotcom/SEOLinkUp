@@ -64,6 +64,40 @@ app_mode = st.sidebar.radio("App Mode", ["🔗 Link Up Optimizer", "🖼️ AI A
 st.sidebar.divider()
 st.sidebar.info("💡 **Tip:** Use the menu above to switch between the Link Optimizer and the Alt Text Generator.")
 
+# --- NEW: Sitemap Auto-Discovery Engine ---
+def discover_sitemap(input_url):
+    parsed = urlparse(input_url)
+    # Ensure we start with a clean scheme
+    scheme = parsed.scheme if parsed.scheme else "https"
+    base_url = f"{scheme}://{parsed.netloc}"
+    if not parsed.netloc: # Handle case where user just typed "theatlantic.com"
+        base_url = f"https://{parsed.path.split('/')[0]}"
+    
+    # 1. Check robots.txt (The Gold Standard)
+    try:
+        r = requests.get(f"{base_url}/robots.txt", timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+        if r.status_code == 200:
+            for line in r.text.split('\n'):
+                if line.lower().startswith('sitemap:'):
+                    return line.split(':', 1)[1].strip()
+    except:
+        pass
+        
+    # 2. Try common default paths
+    common_paths = ['/sitemap.xml', '/sitemap_index.xml']
+    for path in common_paths:
+        test_url = f"{base_url}{path}"
+        try:
+            r = requests.get(test_url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+            # Ensure it's actually an XML file and not a 404 page that returns 200 OK
+            if r.status_code == 200 and 'xml' in r.headers.get('Content-Type', '').lower():
+                return test_url
+        except:
+            pass
+    
+    # 3. Fallback: Return what the user entered if we couldn't find anything better
+    return input_url
+
 # Helper function to parse sitemaps recursively
 def fetch_sitemap_urls(sitemap_url, max_urls=5000):
     urls = []
@@ -168,21 +202,27 @@ if app_mode == "🔗 Link Up Optimizer":
                     sorted_keywords = sorted(master_link_map.keys(), key=len, reverse=True)
 
     with tab_sitemap:
-        st.markdown("**Extract URLs directly from a website's XML sitemap:**")
-        st.markdown("*Note: Keywords are automatically generated from the URL structure (e.g., `/heart-disease` becomes `Heart Disease`).*")
+        st.markdown("**Extract URLs directly from a website:**")
+        st.markdown("*Note: Paste a homepage (e.g., `theatlantic.com`) and we will auto-discover the sitemap!*")
         
         col_sm1, col_sm2 = st.columns([3, 1])
         with col_sm1:
-            sitemap_input = st.text_input("Sitemap URL", placeholder="https://www.example.com/sitemap.xml", label_visibility="collapsed")
+            sitemap_input = st.text_input("Website or Sitemap URL", placeholder="https://www.example.com", label_visibility="collapsed")
         with col_sm2:
-            scan_btn = st.button("Scan Sitemap", type="primary", use_container_width=True)
+            scan_btn = st.button("Scan Site", type="primary", use_container_width=True)
             
         if scan_btn and sitemap_input:
-            with st.spinner("Fetching and parsing sitemap... this may take a moment for large sites."):
-                raw_urls = fetch_sitemap_urls(sitemap_input)
+            with st.spinner("Locating and parsing sitemap... this may take a moment for large sites."):
+                # Run Auto-Discovery First
+                actual_sitemap_url = discover_sitemap(sitemap_input)
+                
+                if actual_sitemap_url != sitemap_input:
+                    st.info(f"🔍 **Auto-discovered sitemap:** `{actual_sitemap_url}`")
+                    
+                raw_urls = fetch_sitemap_urls(actual_sitemap_url)
                 
                 if not raw_urls:
-                    st.error("No URLs found. Make sure the link ends in .xml and the site doesn't block bots.")
+                    st.error("❌ No URLs found. We couldn't auto-discover an XML sitemap for this site.")
                 else:
                     for url in set(raw_urls):
                         # Skip junk assets
